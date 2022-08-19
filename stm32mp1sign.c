@@ -166,18 +166,6 @@ openssl_load_privkey(const char *privkey_path, const char *pw)
                         privkey_path);
                 goto err_out;
         }
-#if OPENSSL_VERSION_NUMBER >= 0x30000000L
-        if (!EVP_PKEY_is_a(privkey, "EC")) {
-                fprintf(stderr, "Privkey %s is not an EC type.\n",
-                        privkey_path);
-                goto err_out;
-        }
-        if (!EVP_PKEY_can_sign(privkey)) {
-                fprintf(stderr, "Privkey %s can't be used to sign.\n",
-                        privkey_path);
-                goto err_out;
-        }
-#endif
         if (!(eckey = EVP_PKEY_get1_EC_KEY(privkey))) {
                 fprintf(stderr, "Unable to get EC key.\n");
                 goto err_out;
