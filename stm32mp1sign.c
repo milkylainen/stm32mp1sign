@@ -140,7 +140,7 @@ openssl_pw_cb(char *buf, int size, int rwflag UNUSED, void *u UNUSED)
 }
 
 static EC_KEY *
-openssl_load_privkey(const char *privkey_path, const char *pw)
+openssl_load_privkey(const char *privkey_path, char *pw)
 {
         BIO *bio_privkey = NULL;
         EVP_PKEY *privkey = NULL;
@@ -155,10 +155,9 @@ openssl_load_privkey(const char *privkey_path, const char *pw)
                 fprintf(stderr, "Unable to load privkey %s.\n", privkey_path);
                 goto err_out;
         }
-        privkey = PEM_read_bio_PrivateKey(bio_privkey, NULL,
-                                          pw ? NULL : openssl_pw_cb,
-                                          pw ? (char *)pw : NULL);
-        if (!privkey) {
+        if (!(privkey = PEM_read_bio_PrivateKey(bio_privkey, NULL,
+                                                pw ? NULL : openssl_pw_cb,
+                                                pw ? pw : NULL))) {
                 fprintf(stderr, "Unable to load privkey %s.\n",
                         privkey_path);
                 goto err_out;
@@ -420,5 +419,6 @@ main(int argc, char *argv[])
                 free(password);
         }
         if (privkey_path) free(privkey_path);
+        munlockall();
         exit(EXIT_FAILURE);
 }
