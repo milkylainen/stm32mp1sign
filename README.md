@@ -14,14 +14,15 @@ Functionally implemented from the descriptions at:
 
 [STM32MP1 Sign Tool Description](https://wiki.st.com/stm32mpu/wiki/Signing_tool)
 
-**_Beware.	Fusing a device	means you can never undo the key.
+**_Beware. Fusing a device	means you can never undo the key.
 If you loose the private key or	password, then that's it.
-No more	signing	new images with another key.
+No more	signing	new images.
 If you also close the device then there	will be	no other way out.
-You have been warned._**
+You have been warned!_**
 
 1. Generate keys. Here you can use STM32CubeProgrammer or regular OpenSSL.
-This should get	you a prime256v1 (default )curve key with	the privkey encrypted in AES256 (default).
+This should get	you a prime256v1 (default) curve key with	the privkey encrypted in AES256 (default).
+**_DO NOT LOOSE THE KEYS!_**
 
 ```
 $. STM32MP_KeyGen_CLI -abs /home/user/KeyFolder/ -pwd qwerty
@@ -34,7 +35,7 @@ $. STM32MP_KeyGen_CLI -abs /home/user/KeyFolder/ -pwd qwerty
 > stm32key fuse 0xc0000000
 ```
 3. You can now use stm32mp1sign	or STM32MP_SigningTool_CLI to sign your	TF-A (fsbl) binary.
-Using stm32mp1sign, the	image is modified in situ. key path must contain a private key
+Using stm32mp1sign, the	image is modified in situ. The key path must contain a private key
 with a public key included. If a password is not specified, stm32mp1sign will ask for one.
 ```
 $ stm32mp1sign --image path/to/tf-a-binary --key path/to/privkey --password qwerty
