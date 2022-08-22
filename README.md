@@ -3,6 +3,7 @@
 **_THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT._**
 
 stm32mp1sign is a C replacement for STM32MP_SigningTool_CLI (closed source) in STM32CubeProgrammer.
+Currently only capable of handling stm32 v1 headers present in the stm32mp15x.
 
 Functionally implemented from the descriptions at:
 
