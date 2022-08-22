@@ -27,6 +27,8 @@
 #include <openssl/bn.h>
 #include <openssl/obj_mac.h>
 
+#include "config.h"
+
 #define UNUSED                          __attribute__((unused))
 #define HEADER_MAGIC                    "STM2"
 /* The ec pubkeys for allowed curves are 65 bytes.
@@ -40,16 +42,9 @@
 #define STM32_HASH_OFFSET               offsetof(struct stm32_header, header_version)
 
 /* The stm32 header is often defined to be 0x100 bytes.
- * This struct is 0xFF bytes. However, some implementations
- * carry a padding of uint32_t x[83/4] (?!?).
+ * However, some implementations carry a padding of
+ * uint32_t x[83/4] (?!?).
  * Other definitions do uint8_t x[83] (like this one).
- * Most of them carry a member "binary_type"
- * after the padding, which extends the struct to 259 bytes.
- * Either way, this is a mess.
- * We don't have any need of poking anything behind
- * the ecdsa_public_key member, so lets just skip
- * everything after the padding and never touch it,
- * keeping this struct below 0x100.
  * Also add packed, which seems to be missing in
  * a lot of implementations in the wild.
  */
@@ -68,6 +63,7 @@ struct __attribute((packed)) stm32_header {
         uint32_t ecdsa_algorithm;
         uint8_t ecdsa_public_key[64];
         uint8_t padding[83];
+        uint8_t binary_type;
 };
 
 static void
@@ -81,6 +77,7 @@ usage(char *argv[])
         printf("--image       ; Path to stm32image file to sign. This modifies the file\n");
         printf("--key         ; Path to the private key used to sign hash. Must contain private and public key.\n");
         printf("--password    ; Not mandatory. Private key password. If not used, program will ask interactively.\n");
+        printf("--version     ; %s version.\n", argv[0]);
         printf("--help        ; This help.\n");
 }
 
@@ -132,7 +129,7 @@ openssl_pw_cb(char *buf, int size, int rwflag UNUSED, void *u UNUSED)
         int len;
         char *passwd;
 
-        passwd = getpass("Privkey password: ");
+        passwd = getpass("stm32mp1sign. Privkey password: ");
         len = strlen(passwd);
         if (len <= 0 || len > size) {
                 return 0;
@@ -199,10 +196,6 @@ openssl_get_pubkey(EC_KEY *eckey, size_t *len, int *alg)
                 fprintf(stderr, "Unable to get EC pubkey.\n");
                 goto err_out;
         }
-        if (!(ctx = BN_CTX_new())) {
-                fprintf(stderr, "Unable to allocate bignum context.\n");
-                goto err_out;
-        }
         if (!(group = EC_KEY_get0_group(eckey))) {
                 fprintf(stderr, "Unable to get EC group.\n");
                 goto err_out;
@@ -219,6 +212,10 @@ openssl_get_pubkey(EC_KEY *eckey, size_t *len, int *alg)
                 *alg = 2;
         } else {
                 fprintf(stderr, "Invalid EC curve in use.\n");
+                goto err_out;
+        }
+        if (!(ctx = BN_CTX_new())) {
+                fprintf(stderr, "Unable to allocate bignum context.\n");
                 goto err_out;
         }
         /* Use point2oct twice.
@@ -291,9 +288,17 @@ main(int argc, char *argv[])
                 {"password", required_argument, 0, 'p'},
                 {"image", required_argument, 0, 'i'},
                 {"help", no_argument, 0, 'h'},
+                {"version", no_argument, 0, 'v'},
                 {0, 0, 0, 0}
         };
 
+        /* Prevent pages from reaching swap.
+         * Contains sensitive data.
+         */
+        if (mlockall(MCL_CURRENT | MCL_FUTURE)) {
+                fprintf(stderr,
+                        "Warn: Failed protecting memory from being swapped.\n");
+        }
         while (1) {
                 c = getopt_long(argc, argv, "k:p:i:h", options, NULL);
                 if (c == -1)
@@ -316,6 +321,10 @@ main(int argc, char *argv[])
                         break;
                 case 'h':
                         usage(argv);
+                        goto err_out;
+                        break;
+                case 'v':
+                        fprintf(stderr, "Version: %s\n", PACKAGE_VERSION);
                         goto err_out;
                         break;
                 default:
@@ -384,22 +393,32 @@ main(int argc, char *argv[])
         /* Copy signature to header.
          * Raw bignum. Two numbers. R concatenated with S.
          */
-        ;
         BN_bn2bin(ECDSA_SIG_get0_r(ecsig),
                   &((h->image_signature)[0]));
         BN_bn2bin(ECDSA_SIG_get0_s(ecsig),
                   &((h->image_signature)[32]));
 
-        EC_KEY_free(eckey);
-        ECDSA_SIG_free(ecsig);
-        OPENSSL_free(buf);
-        munmap(data, datalen);
+        if (ecsig) ECDSA_SIG_free(ecsig);
+        if (buf) OPENSSL_free(buf);
+        if (eckey) EC_KEY_free(eckey);
+        if (data) munmap(data, datalen);
+        if (password) {
+                memset(password, 0, strlen(password));
+                free(password);
+        }
+        if (privkey_path) free(privkey_path);
+        munlockall();
         exit(EXIT_SUCCESS);
 
  err_out:
-        if (eckey) EC_KEY_free(eckey);
         if (ecsig) ECDSA_SIG_free(ecsig);
         if (buf) OPENSSL_free(buf);
+        if (eckey) EC_KEY_free(eckey);
         if (data) munmap(data, datalen);
+        if (password) {
+                memset(password, 0, strlen(password));
+                free(password);
+        }
+        if (privkey_path) free(privkey_path);
         exit(EXIT_FAILURE);
 }
