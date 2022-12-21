@@ -1,5 +1,11 @@
 # stm32mp1sign
 
+Raison d'être:
+Signing stm32mp1 headers is a STM closed source affair.
+A tool part of a large software package (CubeProgrammer).
+Very cumbersome to try to integrate in a normal build environment.
+All is needed is some plain cryptography. stm32mp1sign is written in C.
+
 **_THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT._**
 
 stm32mp1sign is a C replacement for STM32MP_SigningTool_CLI (closed source) in STM32CubeProgrammer.
