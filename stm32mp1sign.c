@@ -1,12 +1,22 @@
 // SPDX-License-Identifier: GPL-2.0+ OR BSD-3-Clause
 /*
  * Copyright (C) 2022, Christian Melki
+ *
+ * Functional contribution list:
+ * Conny Sjaunja 2023, ECDSA verification.
+ *
+ * Version history:
+ * 1.0: First release.
+ * 1.1: Some polishing.
+ * 1.2: Added verification.
  */
 
 #define _DEFAULT_SOURCE
 #include <unistd.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdbool.h>
+#include <errno.h>
 #include <getopt.h>
 #include <errno.h>
 #include <endian.h>
@@ -71,12 +81,19 @@ usage(char *argv[])
 {
         printf("%s usage:\n", argv[0]);
         printf("---------------------\n");
-        printf("%s --image <file> --key <file> [--password <string>]\n", argv[0]);
+        printf("%s --image <file> --key <file> --sign [--password <string>]\n", argv[0]);
+        printf("%s --image <file> --key <file> --verify\n", argv[0]);
         printf("%s --help\n", argv[0]);
         printf("where:\n");
-        printf("--image       ; Path to stm32image file to sign. This modifies the file\n");
-        printf("--key         ; Path to the private key used to sign hash. Must contain private and public key.\n");
-        printf("--password    ; Not mandatory. Private key password. If not used, program will ask interactively.\n");
+        printf("--image       ; Path to stm32image file.\n");
+        printf("--key         ; Path to the key used.\n");
+        printf("              ; The only allowed EC curves are: prime256v1, brainpoolP256r1\n");
+        printf("              ; Contains private and public key when signing.\n");
+        printf("              ; Contains the public key when verifying.\n");
+        printf("--sign        ; Sign the stm32image.\n");
+        printf("--verify      ; Verify the stm32image.\n");
+        printf("--password    ; Not mandatory. Contains private key password. Used when signing.\n");
+        printf("              ; If not used, program will ask interactively.\n");
         printf("--version     ; %s version.\n", argv[0]);
         printf("--help        ; This help.\n");
 }
@@ -140,40 +157,47 @@ openssl_pw_cb(char *buf, int size, int rwflag UNUSED, void *u UNUSED)
 }
 
 static EC_KEY *
-openssl_load_privkey(const char *privkey_path, char *pw)
+openssl_load_key(const char *key_path, char *pw, bool privkey)
 {
-        BIO *bio_privkey = NULL;
-        EVP_PKEY *privkey = NULL;
+        BIO *bio_key = NULL;
+        EVP_PKEY *key = NULL;
         EC_KEY *eckey = NULL;
 
-        if (!privkey_path || !privkey_path[0]) {
+        if (!key_path || !key_path[0]) {
                 fprintf(stderr, "Invalid input.\n");
                 goto err_out;
         }
 
-        if (!(bio_privkey = BIO_new_file(privkey_path, "r"))) {
-                fprintf(stderr, "Unable to load privkey %s.\n", privkey_path);
+        if (!(bio_key = BIO_new_file(key_path, "r"))) {
+                fprintf(stderr, "Unable to load key %s.\n", key_path);
                 goto err_out;
         }
-        if (!(privkey = PEM_read_bio_PrivateKey(bio_privkey, NULL,
-                                                pw ? NULL : openssl_pw_cb,
-                                                pw ? pw : NULL))) {
-                fprintf(stderr, "Unable to load privkey %s.\n",
-                        privkey_path);
+        if (privkey) {
+                key = PEM_read_bio_PrivateKey(bio_key, NULL,
+                                              pw ? NULL : openssl_pw_cb,
+                                              pw ? pw : NULL);
+        } else {
+                key = PEM_read_bio_PUBKEY(bio_key, NULL,
+                                          NULL,
+                                          NULL);
+        }
+        if (!key) {
+                fprintf(stderr, "Unable to load key %s.\n",
+                        key_path);
                 goto err_out;
         }
-        if (!(eckey = EVP_PKEY_get1_EC_KEY(privkey))) {
+        if (!(eckey = EVP_PKEY_get1_EC_KEY(key))) {
                 fprintf(stderr, "Unable to get EC key.\n");
                 goto err_out;
         }
 
-        if (privkey) EVP_PKEY_free(privkey);
-        if (bio_privkey) BIO_free(bio_privkey);
+        if (key) EVP_PKEY_free(key);
+        if (bio_key) BIO_free(bio_key);
         return eckey;
 
  err_out:
-        if (privkey) EVP_PKEY_free(privkey);
-        if (bio_privkey) BIO_free(bio_privkey);
+        if (key) EVP_PKEY_free(key);
+        if (bio_key) BIO_free(bio_key);
         return NULL;
 }
 
@@ -248,8 +272,8 @@ openssl_get_pubkey(EC_KEY *eckey, size_t *len, int *alg)
 }
 
 static ECDSA_SIG *
-openssl_do_ecdsa_sha256_sign(EC_KEY *eckey, unsigned char *data,
-                             unsigned long datalen)
+openssl_do_ecdsa_sha256_sign(EC_KEY *eckey,
+                             unsigned char *data, unsigned long datalen)
 {
         ECDSA_SIG *ecsig = NULL;
 
@@ -264,15 +288,38 @@ openssl_do_ecdsa_sha256_sign(EC_KEY *eckey, unsigned char *data,
                 goto err_out;
         }
 
- err_out:
         return ecsig;
+
+ err_out:
+        return NULL;
+}
+
+static ECDSA_SIG *
+openssl_do_ecdsa_sha256_verify(ECDSA_SIG *ecsig, EC_KEY *eckey,
+                               unsigned char *data, unsigned long datalen)
+{
+        if (!ecsig || !eckey || !data || !datalen) {
+                fprintf(stderr, "Invalid input.\n");
+                goto err_out;
+        }
+
+        if (!(ECDSA_do_verify(SHA256(data, datalen, NULL),
+                              SHA256_DIGEST_LENGTH, ecsig, eckey))) {
+                fprintf(stderr, "Unable to verify ECDSA signature.\n");
+                goto err_out;
+        }
+
+        return ecsig;
+
+ err_out:
+        return NULL;
 }
 
 int
 main(int argc, char *argv[])
 {
         struct stm32_header *h = NULL;
-        char *privkey_path = NULL;
+        char *key_path = NULL;
         char *password = NULL;
         EC_KEY *eckey = NULL;
         ECDSA_SIG *ecsig = NULL;
@@ -281,13 +328,16 @@ main(int argc, char *argv[])
         uint8_t *buf = NULL;
         size_t len;
         int alg, c, fd = -1;
+        bool sign = false, verify = false;
 
         static struct option options[] = {
-                {"key", required_argument, 0, 'k'},
-                {"password", required_argument, 0, 'p'},
                 {"image", required_argument, 0, 'i'},
+                {"key", required_argument, 0, 'k'},
+                {"sign", no_argument, 0, 's'},
+                {"verify", no_argument, 0, 'v'},
+                {"password", required_argument, 0, 'p'},
                 {"help", no_argument, 0, 'h'},
-                {"version", no_argument, 0, 'v'},
+                {"version", no_argument, 0, 'V'},
                 {0, 0, 0, 0}
         };
 
@@ -299,16 +349,10 @@ main(int argc, char *argv[])
                         "Warn: Failed protecting memory from being swapped.\n");
         }
         while (1) {
-                c = getopt_long(argc, argv, "k:p:i:h", options, NULL);
+                c = getopt_long(argc, argv, "i:svk:p:hV", options, NULL);
                 if (c == -1)
                         break;
                 switch (c) {
-                case 'k':
-                        privkey_path = strdup(optarg);
-                        break;
-                case 'p':
-                        password = strdup(optarg);
-                        break;
                 case 'i':
                         fd = open(optarg, O_RDWR);
                         if (fd < 0) {
@@ -318,11 +362,23 @@ main(int argc, char *argv[])
                                 goto err_out;
                         }
                         break;
+                case 'k':
+                        key_path = strdup(optarg);
+                        break;
+                case 's':
+                        sign = true;
+                        break;
+                case 'v':
+                        verify = true;
+                        break;
+                case 'p':
+                        password = strdup(optarg);
+                        break;
                 case 'h':
                         usage(argv);
                         goto err_out;
                         break;
-                case 'v':
+                case 'V':
                         fprintf(stderr, "Version: %s\n", PACKAGE_VERSION);
                         goto err_out;
                         break;
@@ -334,6 +390,13 @@ main(int argc, char *argv[])
                 }
         }
 
+        if (sign == verify) {
+                fprintf(stderr, "%s: Op must be either sign or verify.\n",
+                        argv[0]);
+                usage(argv);
+                goto err_out;
+        }
+
         if (fd < 0) {
                 fprintf(stderr, "%s: Missing stm32 image file.\n",
                         argv[0]);
@@ -341,8 +404,8 @@ main(int argc, char *argv[])
                 goto err_out;
         }
 
-        if (!privkey_path) {
-                fprintf(stderr, "%s: Missing privkey path or password.\n",
+        if (!key_path) {
+                fprintf(stderr, "%s: Missing key path or password.\n",
                         argv[0]);
                 usage(argv);
                 goto err_out;
@@ -352,50 +415,81 @@ main(int argc, char *argv[])
         if (!(data = stm32image_load(fd, &datalen))) {
                 goto err_out;
         }
-        /* Load privkey. Must contain pubkey */
-        if (!(eckey = openssl_load_privkey(privkey_path, password))) {
+        /* Load key.
+         * Contains both priv and pubkey if signing.
+         * Contains only pubkey if verifying.
+         */
+        if (!(eckey = openssl_load_key(key_path, password, sign))) {
                 goto err_out;
         }
-        /* Get pubkey from privkey. */
-        buf = openssl_get_pubkey(eckey, &len, &alg);
-        if (!buf || buf[0] != POINT_CONVERSION_UNCOMPRESSED ||
-            len != EC_POINT_UNCOMPRESSED_LEN) {
-                fprintf(stderr, "EC pubkey invalid length.\n");
-                goto err_out;
-        }
-        /* Slap the header over the data so we can modify it. */
+        /* Slap the header over the data so we can modify it.
+         * Don't forget header endians.
+         */
         h = (struct stm32_header *)data;
-        /* Copy pubkey to header.
-         * First byte is the type declaration. Skip it.
-         * Raw bignum. Two points on curve. X concatenated with Y.
-         */
-        memcpy(h->ecdsa_public_key, &buf[1], len - 1);
-        /* option:
-         * 0: signed.
-         * 1: not signed.
-         */
-        h->option_flags = htole32(0);
-        /* Algorithm:
-         * 1: prime256v1
-         * 2: brainpoolP256r1
-         */
-        h->ecdsa_algorithm = htole32(alg);
-        /* Do ECDSA signature with sha256
-         * from correct offset in header to end of data.
-         */
-        if (!(ecsig =
-              openssl_do_ecdsa_sha256_sign(eckey,
-                                           &data[STM32_HASH_OFFSET],
-                                           datalen - STM32_HASH_OFFSET))) {
-                goto err_out;
+        /* sign and verify already checked to be mutually exclusive */
+        if (sign) {
+                /* Get raw pubkey from key. */
+                if (!(buf = openssl_get_pubkey(eckey, &len, &alg))) {
+                        goto err_out;
+                }
+                if (buf[0] != POINT_CONVERSION_UNCOMPRESSED ||
+                    len != EC_POINT_UNCOMPRESSED_LEN) {
+                        fprintf(stderr, "EC pubkey invalid length.\n");
+                        goto err_out;
+                }
+                /* Copy raw pubkey to header.
+                 * First byte is the type declaration. Skip it.
+                 * Raw bignum. Two points on curve. X concatenated with Y.
+                 */
+                memcpy(h->ecdsa_public_key, &buf[1], len - 1);
+                /* option:
+                 * 0: signed.
+                 * 1: not signed.
+                 */
+                h->option_flags = htole32(0);
+                /* Algorithm:
+                 * 1: prime256v1
+                 * 2: brainpoolP256r1
+                 */
+                h->ecdsa_algorithm = htole32(alg);
+                /* Do ECDSA signature with sha256
+                 * from correct offset in header to end of data.
+                 */
+                if (!(ecsig =
+                      openssl_do_ecdsa_sha256_sign(eckey,
+                                                   &data[STM32_HASH_OFFSET],
+                                                   datalen - STM32_HASH_OFFSET))) {
+                        goto err_out;
+                }
+                /* Copy signature to header.
+                 * Raw bignum. Two numbers. R concatenated with S.
+                 */
+                BN_bn2bin(ECDSA_SIG_get0_r(ecsig),
+                          &((h->image_signature)[0]));
+                BN_bn2bin(ECDSA_SIG_get0_s(ecsig),
+                          &((h->image_signature)[32]));
         }
-        /* Copy signature to header.
-         * Raw bignum. Two numbers. R concatenated with S.
-         */
-        BN_bn2bin(ECDSA_SIG_get0_r(ecsig),
-                  &((h->image_signature)[0]));
-        BN_bn2bin(ECDSA_SIG_get0_s(ecsig),
-                  &((h->image_signature)[32]));
+        if (verify) {
+                if (!(ecsig = ECDSA_SIG_new())) {
+                        fprintf(stderr, "Unable to allocate a ecsig structure.\n");
+                        goto err_out;
+                }
+                /* Get signature from header
+                 * Raw bignum. Two numbers. R concatenated with S.
+                 */
+                ECDSA_SIG_set0(ecsig,
+                               BN_bin2bn(&((h->image_signature)[0]), 32, NULL),
+                               BN_bin2bn(&((h->image_signature)[32]), 32, NULL));
+                /* Do ECDSA verification with sha256
+                 * from correct offset in header to end of data.
+                 */
+                if (!(ecsig =
+                      openssl_do_ecdsa_sha256_verify(ecsig, eckey,
+                                                     &data[STM32_HASH_OFFSET],
+                                                     datalen - STM32_HASH_OFFSET))) {
+                        goto err_out;
+                }
+        }
 
         if (ecsig) ECDSA_SIG_free(ecsig);
         if (buf) OPENSSL_free(buf);
@@ -405,7 +499,7 @@ main(int argc, char *argv[])
                 memset(password, 0, strlen(password));
                 free(password);
         }
-        if (privkey_path) free(privkey_path);
+        if (key_path) free(key_path);
         munlockall();
         exit(EXIT_SUCCESS);
 
@@ -418,7 +512,7 @@ main(int argc, char *argv[])
                 memset(password, 0, strlen(password));
                 free(password);
         }
-        if (privkey_path) free(privkey_path);
+        if (key_path) free(key_path);
         munlockall();
         exit(EXIT_FAILURE);
 }
