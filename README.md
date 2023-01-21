@@ -2,14 +2,15 @@
 
 Raison d'être:
 Signing stm32mp1 headers is a STM closed source affair.
-A tool part of a large software package (CubeProgrammer).
-Very cumbersome to try to integrate in a normal build environment.
-All is needed is some plain cryptography. stm32mp1sign is written in C.
+The signing tool is part of a large software package (CubeProgrammer).
+And it is very cumbersome to try to integrate in a normal build environment.
+But fortunately, all is needed is some plain cryptography.
+stm32mp1sign is written in C and uses openssl.
 
 **_THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT._**
 
 stm32mp1sign is a C replacement for STM32MP_SigningTool_CLI (closed source) in STM32CubeProgrammer.
-Currently only capable of handling stm32 v1 headers present in the stm32mp15x.
+It is currently only capable of handling stm32 v1 headers present in the stm32mp15x series.
 
 Functionally implemented from the descriptions at:
 
@@ -32,18 +33,36 @@ This should get	you a prime256v1 (default) curve key with	the privkey encrypted 
 **_DO NOT LOOSE THE KEYS!_**
 
 ```
-$. STM32MP_KeyGen_CLI -abs /home/user/KeyFolder/ -pwd qwerty
-```
 
-2. Copy	the hash of the	public key to U-boot and fuse it there. (WARNING!)
+$ ./STM32MP_KeyGen_CLI -abs /home/user/KeyFolder/ -pwd qwerty
+
+or
+
+$ openssl ecparam -name prime256v1 -genkey -noout -out privateKey.pem
+$ openssl ec -in privateKey.pem -pubout -out publicKey.pem
+
 ```
-> tftpboot 0xc0000000 publicKeysHash.bin
-> stm32key read 0xc0000000
-> stm32key fuse 0xc0000000
-```
-3. You can now use stm32mp1sign	or STM32MP_SigningTool_CLI to sign your	TF-A (fsbl) binary.
+2. You can now use stm32mp1sign	to sign your TF-A (fsbl) binary.
 Using stm32mp1sign, the	image is modified in situ. The key path must contain a private key
 with a public key included. If a password is not specified, stm32mp1sign will ask for one.
 ```
-$ stm32mp1sign --image path/to/tf-a-binary --key path/to/privkey --password qwerty
+
+$ stm32mp1sign --image path/to/tf-a-binary --key path/to/privkey --sign --password qwerty
+
+```
+3. You can also use stm32mp1sign to verify you TF-A (fsbl) binary.
+The key path must contain a public key. You can amend the option --pubhash. It outputs a sha256 hash of the public key raw ecpoints in a file.
+The usage of --pubhash is not mandatory.
+```
+
+$ stm32mp1sign --image path/to/tf-a-binary --key path/to/pubkey --verify --pubhash
+
+```
+4. Copy	the hash of the	public key to U-boot and fuse it there. (WARNING!)
+```
+
+> tftpboot 0xc0000000 publicKeyHash.bin
+> stm32key read 0xc0000000
+> stm32key fuse 0xc0000000
+
 ```
