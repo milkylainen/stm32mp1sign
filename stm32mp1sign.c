@@ -9,6 +9,7 @@
  * 1.0: First release.
  * 1.1: Some polishing.
  * 1.2: Added verification.
+ * 1.3: Add simple pubkey hash file creation.
  */
 
 #define _DEFAULT_SOURCE
@@ -20,6 +21,7 @@
 #include <getopt.h>
 #include <errno.h>
 #include <endian.h>
+#include <libgen.h>
 
 #include <sys/mman.h>
 #include <fcntl.h>
@@ -94,6 +96,8 @@ usage(char *argv[])
         printf("--verify      ; Verify the stm32image.\n");
         printf("--password    ; Not mandatory. Contains private key password. Used when signing.\n");
         printf("              ; If not used, program will ask interactively.\n");
+        printf("--pubhash     ; Not mandatory. If used then the raw ec point hash of the public key\n");
+        printf("              ; will be overwritten to the current dir + pubkey.hash filename.\n");
         printf("--version     ; %s version.\n", argv[0]);
         printf("--help        ; This help.\n");
 }
@@ -319,6 +323,8 @@ int
 main(int argc, char *argv[])
 {
         struct stm32_header *h = NULL;
+        FILE *fp = NULL;
+        unsigned char *p;
         char *key_path = NULL;
         char *password = NULL;
         EC_KEY *eckey = NULL;
@@ -328,7 +334,7 @@ main(int argc, char *argv[])
         uint8_t *buf = NULL;
         size_t len;
         int alg, c, fd = -1;
-        bool sign = false, verify = false;
+        bool sign = false, verify = false, pubhash = false;
 
         static struct option options[] = {
                 {"image", required_argument, 0, 'i'},
@@ -336,8 +342,9 @@ main(int argc, char *argv[])
                 {"sign", no_argument, 0, 's'},
                 {"verify", no_argument, 0, 'v'},
                 {"password", required_argument, 0, 'p'},
-                {"help", no_argument, 0, 'h'},
+                {"pubhash", no_argument, 0, 'x'},
                 {"version", no_argument, 0, 'V'},
+                {"help", no_argument, 0, 'h'},
                 {0, 0, 0, 0}
         };
 
@@ -349,7 +356,7 @@ main(int argc, char *argv[])
                         "Warn: Failed protecting memory from being swapped.\n");
         }
         while (1) {
-                c = getopt_long(argc, argv, "i:svk:p:hV", options, NULL);
+                c = getopt_long(argc, argv, "i:svk:p:xhV", options, NULL);
                 if (c == -1)
                         break;
                 switch (c) {
@@ -374,12 +381,15 @@ main(int argc, char *argv[])
                 case 'p':
                         password = strdup(optarg);
                         break;
-                case 'h':
-                        usage(argv);
-                        goto err_out;
+                case 'x':
+                        pubhash = true;
                         break;
                 case 'V':
                         fprintf(stderr, "Version: %s\n", PACKAGE_VERSION);
+                        goto err_out;
+                        break;
+                case 'h':
+                        usage(argv);
                         goto err_out;
                         break;
                 default:
@@ -490,7 +500,23 @@ main(int argc, char *argv[])
                         goto err_out;
                 }
         }
-
+        /* Pubkeys are always available, regardless of operation */
+        if (pubhash) {
+                if (!(p = SHA256(h->ecdsa_public_key,
+                                 EC_POINT_UNCOMPRESSED_LEN - 1, NULL))) {
+                        fprintf(stderr, "Unable to calculate sha256 of raw pubkey.\n");
+                        goto err_out;
+                }
+                if (!(fp = fopen("./pubkey.hash", "w+"))) {
+                        fprintf(stderr, "Unable to open pubkey hash file.\n");
+                        goto err_out;
+                }
+                if (fwrite(p, 1, SHA256_DIGEST_LENGTH, fp) !=
+                    SHA256_DIGEST_LENGTH) {
+                        fprintf(stderr, "Unable to write pubkey hash.\n");
+                        goto err_out;
+                }
+        }
         if (ecsig) ECDSA_SIG_free(ecsig);
         if (buf) OPENSSL_free(buf);
         if (eckey) EC_KEY_free(eckey);
@@ -500,6 +526,7 @@ main(int argc, char *argv[])
                 free(password);
         }
         if (key_path) free(key_path);
+        if (fp) fclose(fp);
         munlockall();
         exit(EXIT_SUCCESS);
 
@@ -513,6 +540,7 @@ main(int argc, char *argv[])
                 free(password);
         }
         if (key_path) free(key_path);
+        if (fp) fclose(fp);
         munlockall();
         exit(EXIT_FAILURE);
 }

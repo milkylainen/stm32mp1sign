@@ -1,5 +1,5 @@
 AC_PREREQ([2.69])
-AC_INIT([stm32mp1sign], [1.2], [christian.melki@t2data.com])
+AC_INIT([stm32mp1sign], [1.3], [christian.melki@t2data.com])
 AM_INIT_AUTOMAKE([-Wall -Werror foreign])
 AC_CONFIG_SRCDIR([stm32mp1sign.c])
 AC_CONFIG_HEADERS([config.h])
