@@ -163,7 +163,7 @@ if [ ! -z ${ROT_KEY_PWD} ]; then
 fi
 
 # Sign FSBL
-stm32mp1sign --image ${FSBL} ${KEY_HANDLING}
+stm32mp1sign --image ${FSBL} ${KEY_HANDLING} --sign
 
 if [ $? -ne 0 ]; then
     echo "fsbl: ${FSBL} signing failed"
